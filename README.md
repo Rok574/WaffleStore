@@ -4,7 +4,7 @@ A **jailed** app store app downgrader, based off of [MuffinStoreJailed](https://
 [PancakeStore (by jailbreakdotparty)](https://github.com/jailbreakdotparty/PancakeStore/releases/latest) • [MuffinStoreJailed (by mineek)](https://github.com/mineek/MuffinStoreJailed-Public)
 
 >[!IMPORTANT]
->On older versions of WaffleStore, you couldnt log in if you were on iOS 27. Using WaffleStore 2.1 (1) or higher fixes these issues. This is due to a backend fix Apple made. This method is unreliable and might not work as good as the last version. Always make a back-up of your device before proceeding. We do not take any responsibility for broken or damaged phones.
+>WafleStore has been temporarily discontinued. Apple has changed their backend for authentication, meaning that we can no longer use the method we have been relied on. WaffleStore will not work until someone finds another backend solution. For the time being, the repo will still be up. Don't come complain about that it isn't working, there is nothing we can do.
 
 >[!WARNING]
 >Use this tool at your own risk! You may lose app data, and other damage could occur.
