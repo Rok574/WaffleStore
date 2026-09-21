@@ -1,0 +1,76 @@
+name: Build WaffleStore
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Build in Debug configuration'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    env:
+      APPLICATION_NAME: WaffleStore
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set Configuration Variable
+        run: |
+          if [ "${{ github.event.inputs.debug_mode }}" == "true" ]; then
+            echo "CONFIG=Debug" >> $GITHUB_ENV
+            echo "SDK_SUBPATH=Debug-iphoneos" >> $GITHUB_ENV
+            echo "IPA_NAME=WaffleStore.debug.ipa" >> $GITHUB_ENV
+          else
+            echo "CONFIG=Release" >> $GITHUB_ENV
+            echo "SDK_SUBPATH=Release-iphoneos" >> $GITHUB_ENV
+            echo "IPA_NAME=WaffleStore.ipa" >> $GITHUB_ENV
+          fi
+
+      - name: Build Application
+        run: |
+          echo "[*] WaffleStore Build Script"
+          mkdir -p build
+          cd build
+          
+          echo "[*] Building..."
+          xcodebuild -project "../$APPLICATION_NAME.xcodeproj" \
+              -scheme "$APPLICATION_NAME" \
+              -configuration "$CONFIG" \
+              -derivedDataPath "$(pwd)/DerivedDataApp" \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              clean build \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_ENTITLEMENTS="" \
+              CODE_SIGNING_ALLOWED="NO"
+
+          DD_APP_PATH="$(pwd)/DerivedDataApp/Build/Products/$SDK_SUBPATH/$APPLICATION_NAME.app"
+          TARGET_APP="$(pwd)/$APPLICATION_NAME.app"
+          cp -r "$DD_APP_PATH" "$TARGET_APP"
+
+          echo "[*] Stripping signature..."
+          codesign --remove "$TARGET_APP" || true
+          rm -rf "$TARGET_APP/_CodeSignature" "$TARGET_APP/embedded.mobileprovision"
+
+          echo "[*] Packaging..."
+          mkdir Payload
+          cp -r "$APPLICATION_NAME.app" Payload/$APPLICATION_NAME.app
+          zip -vr "$IPA_NAME" Payload
+          
+          mv "$IPA_NAME" ..
+          cd ..
+          rm -rf build
+          echo "[*] All done!"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IPA_NAME }}
+          path: ${{ env.IPA_NAME }}
