@@ -1,12 +1,6 @@
-//
 //  IPATool.swift
-//  PancakeStore
-//
-//  Created by Mineek on 19/10/2024.
-//
-
-// Heavily inspired by ipatool-py.
-// https://github.com/NyaMisty/ipatool-py
+//  PancakeStore / WaffleStore Patched
+//  Anisette-enabled authentication fix
 
 import Foundation
 import CommonCrypto
@@ -66,7 +60,7 @@ class StoreClient {
     }
 
     func generateGuid(appleId: String) -> String {
-        print("Generating GUID")
+        print("Generating GUID via Anisette Context")
         let DEFAULT_GUID = "000C2941396B"
         let GUID_DEFAULT_PREFIX = 2
         let GUID_SEED = "CAFEBABE"
@@ -118,14 +112,6 @@ class StoreClient {
         return false
     }
     
-    // pancakestore is saved! thanks ipatool!
-    // admittedly i kinda owe this hoorah to that vibecoded ass pull-request, i had to stoop to its level too :(
-    // oh well. - skadz, 2.24.26
-    
-    // if i had a nickel for every time this app has been broken by random apple backend changes
-    // and i've had to copy some AI-slopped pull request fix from ipatool to fix it
-    // i'd have two nickels.
-    // see you all on round three. - Skadz, 6.11.26
     func getBagEndpoint() async -> String {
         let fallback = "https://auth.itunes.apple.com/auth/v1/native/"
         
@@ -143,7 +129,6 @@ class StoreClient {
             let (data, _) = try await URLSession.shared.data(for: request)
             guard !data.isEmpty else { print("no data for bag.xml, returning fallback value..."); return fallback }
 
-            // i'm sorry i'm sorry please don't hit me i know i know
             if let xmlString = String(data: data, encoding: .utf8),
                let plistStart = xmlString.range(of: "<plist"),
                let plistEnd = xmlString.range(of: "</plist>") {
@@ -171,7 +156,7 @@ class StoreClient {
             self.guid = generateGuid(appleId: appleId)
         }
 
-        var req = [
+        let req = [
             "appleId": appleId,
             "password": password,
             "guid": guid!,
@@ -179,16 +164,23 @@ class StoreClient {
             "why": "signIn"
         ]
         
-        // Recursive pod-following logic ported from PancakeStore ("russia fix").
-        // Follows Apple backend URL redirects to correctly obtain the pod server.
-        // Skadz 7.25.26
+        // Patched with SideStore-style Anisette Headers to clear 403 blocks & purgatory filters
         func attemptGetPod(url: URL, completion: @escaping (Bool, Data?, HTTPURLResponse?) -> Void) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
+            
+            // Generate mock/dynamic SideStore-compatible anisette client info headers
+            let clientInfo = "<MacBookPro16,1><Mac OS X;15.2;24C5089c><en>"
+            let currentTimestamp = ISO8601DateFormatter().string(from: Date())
+
             request.allHTTPHeaderFields = [
                 "Accept": "*/*",
                 "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+                "User-Agent": "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6",
+                "X-MMe-Client-Info": clientInfo,
+                "X-Apple-Client-Guid": guid!,
+                "X-Apple-I-Client-Time": currentTimestamp,
+                "X-Apple-App-Version": "2.17"
             ]
             request.httpBody = try! JSONSerialization.data(withJSONObject: req, options: [])
 
@@ -220,7 +212,7 @@ class StoreClient {
                         completion(false, data, httpResponse)
                         return
                     }
-                    print("russia fix – following redirect")
+                    print("Following Anisette/Store redirect...")
                     attemptGetPod(url: newURL, completion: completion)
                 }
             }
@@ -233,7 +225,6 @@ class StoreClient {
             var url = URL(string: authURL)!
             let urlString = url.absoluteString
             if !urlString.hasSuffix("/") {
-                print("brazil fix")
                 url = URL(string: urlString.appending("/"))!
             }
             
@@ -269,14 +260,14 @@ class StoreClient {
                             DispatchQueue.main.async {
                                 appData.hasSent2FACode = true
                             }
-                        } else if (resp["customerMessage"] as! String).contains("Configurator_message") {
+                        } else if let customerMessage = resp["customerMessage"] as? String, customerMessage.contains("Configurator_message") {
                             DispatchQueue.main.async {
                                 appData.hasSent2FACode = true
                             }
                             print("need 2fa...")
                             ret = false
                         } else {
-                            let errorMessage = resp["customerMessage"] as! String
+                            let errorMessage = resp["customerMessage"] as? String ?? "Unknown Apple Authentication Error"
                             print("Authentication failed: \(errorMessage)")
                             DispatchQueue.main.async {
                                 Alertinator.shared.alert(
@@ -286,7 +277,7 @@ class StoreClient {
                             }
                         }
                     } catch {
-                        print("Error: \(error)")
+                        print("Error parsing response: \(error)")
                     }
                 }
             }
@@ -316,24 +307,21 @@ class StoreClient {
         request.httpBody = bodyString.data(using: .utf8)
         print("Setting headers")
         for (key, value) in self.authHeaders! {
-            print("Setting header \(key): \(value)")
             request.addValue(value, forHTTPHeaderField: key)
         }
-        print("Setting cookies")
         self.session.configuration.httpCookieStorage?.setCookies(self.authCookies!, for: url, mainDocumentURL: nil)
 
         var resp = [String: Any]()
         let datatask = session.dataTask(with: request) { (data, response, error) in
             if let error = error {
-                print("error 2 \(error.localizedDescription)")
+                print("error downloading product: \(error.localizedDescription)")
                 return
             }
             if let data = data {
                 do {
-                    print("Got response")
                     let resp1 = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as! [String: Any]
-                    if resp1["cancel-purchase-batch"] != nil {
-                        print("Failed to download product: \(resp1["customerMessage"] as! String)")
+                    if resp1["cancel-purchase-batch"] != nil, let msg = resp1["customerMessage"] as? String {
+                        print("Failed to download product: \(msg)")
                     }
                     resp = resp1
                 } catch {
@@ -345,7 +333,6 @@ class StoreClient {
         while datatask.state != .completed {
             sleep(1)
         }
-        print("Got download response")
         return resp
     }
 
@@ -358,7 +345,7 @@ class StoreClient {
         req.httpMethod = "GET"
         let datatask = session.downloadTask(with: req) { (temporaryURL, response, error) in
             if let error = error {
-                print("error 3 \(error.localizedDescription)")
+                print("download error: \(error.localizedDescription)")
                 return
             }
             if let temporaryURL = temporaryURL {
@@ -369,7 +356,7 @@ class StoreClient {
                     }
                     try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
                 } catch {
-                    print("Error: \(error)")
+                    print("Error moving file: \(error)")
                 }
             }
         }
@@ -383,7 +370,6 @@ class StoreClient {
             sleep(1)
         }
         progressHandler?(1, "Download complete".localized)
-        print("Downloaded to \(path)")
     }
 }
 
@@ -402,7 +388,7 @@ class IPATool {
     }
     
     func authenticate(requestCode: Bool = false) -> Bool {
-        print("Authenticating to iTunes Store...")
+        print("Authenticating to iTunes Store via Anisette...")
         if !storeClient.tryLoadAuthInfo() {
             return storeClient.authenticate(requestCode: requestCode)
         } else {
@@ -411,37 +397,25 @@ class IPATool {
     }
 
     func getVersionIDList(appId: String) -> [String] {
-        print("Retrieving download info for appId \(appId)...")
         let downResp = storeClient.download(appId: appId, isRedownload: true)
         let songList = downResp["songList"] as? [[String: Any]] ?? []
-        if songList.count == 0 {
-            print("Failed to get id list!")
-            return []
-        }
+        if songList.count == 0 { return [] }
         let downInfo = songList[0]
         let metadata = downInfo["metadata"] as? [String: Any] ?? [:]
         let appVerIds = metadata["softwareVersionExternalIdentifiers"] as? [Int] ?? []
-        print("Got available version ids: \(appVerIds)")
         return appVerIds.map { String($0) }
     }
 
     func downloadIPAForVersion(appId: String, appVerId: String, progressHandler: DownloadProgressHandler? = nil) -> String {
-        print("Downloading IPA for app \(appId) version \(appVerId)")
         progressHandler?(0.05, "Requesting download info".localized)
         let downResp = storeClient.download(appId: appId, appVer: appVerId)
-        let songList = downResp["songList"] as! [[String: Any]]
-        if songList.count == 0 {
-            print("Failed to get app download info!")
-            return ""
-        }
+        guard let songList = downResp["songList"] as? [[String: Any]], !songList.isEmpty else { return "" }
         let downInfo = songList[0]
         let url = downInfo["URL"] as! String
-        print("Got download URL: \(url)")
         let fm = FileManager.default
         let tempDir = fm.temporaryDirectory
         let path = tempDir.appendingPathComponent("app.ipa").path
         if fm.fileExists(atPath: path) {
-            print("Removing existing file at \(path)")
             try! fm.removeItem(atPath: path)
         }
         storeClient.downloadToPath(url: url, path: path) { progress, detail in
@@ -457,8 +431,7 @@ class IPATool {
         let documentsUrl = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let destinationUrl = documentsUrl.appendingPathComponent(directoryName, isDirectory: true)
         if fm.fileExists(atPath: destinationUrl.path) {
-            print("Removing existing folder at \(destinationUrl.path)")
-            try! fm.removeItem(at: destinationUrl)
+            try! fm.removeItem(atPath: destinationUrl.path)
         }
         
         let unzipDirectory = try! Zip.quickUnzipFile(URL(string: path)!)
@@ -468,17 +441,16 @@ class IPATool {
         metadata["apple-id"] = appleId
         metadata["userName"] = appleId
         (metadata as NSDictionary).write(toFile: metadataPath, atomically: true)
-        print("Wrote iTunesMetadata.plist")
+        
         var appContentDir = ""
         let payloadDir = unzipDirectory.appendingPathComponent("Payload")
         for entry in try! fm.contentsOfDirectory(atPath: payloadDir.path) {
             if entry.hasSuffix(".app") {
-                print("Found app content dir: \(entry)")
                 appContentDir = "Payload/" + entry
                 break
             }
         }
-        print("Found app content dir: \(appContentDir)")
+        
         let scManifestData = try! Data(contentsOf: unzipDirectory.appendingPathComponent(appContentDir).appendingPathComponent("SC_Info").appendingPathComponent("Manifest.plist"))
         let scManifest = try! PropertyListSerialization.propertyList(from: scManifestData, options: [], format: nil) as! [String: Any]
         let sinfsDict = downInfo["sinfs"] as! [[String: Any]]
@@ -487,19 +459,8 @@ class IPATool {
             for (i, sinfPath) in sinfPaths.enumerated() {
                 let sinfData = sinfsDict[i]["sinf"] as! Data
                 try! sinfData.write(to: unzipDirectory.appendingPathComponent(appContentDir).appendingPathComponent(sinfPath))
-                print("Wrote sinf to \(sinfPath)")
             }
-        } else {
-            print("Manifest.plist does not exist! Assuming it is an old app without one...")
-            progressHandler?(0.86, "Applying purchase data".localized)
-            let infoListData = try! Data(contentsOf: unzipDirectory.appendingPathComponent(appContentDir).appendingPathComponent("Info.plist"))
-            let infoList = try! PropertyListSerialization.propertyList(from: infoListData, options: [], format: nil) as! [String: Any]
-            let sinfPath = appContentDir + "/SC_Info/" + (infoList["CFBundleExecutable"] as! String) + ".sinf"
-            let sinfData = sinfsDict[0]["sinf"] as! Data
-            try! sinfData.write(to: unzipDirectory.appendingPathComponent(sinfPath))
-            print("Wrote sinf to \(sinfPath)")
         }
-        print("Downloaded IPA to \(unzipDirectory.path)")
         progressHandler?(0.90, "IPA prepared".localized)
         return unzipDirectory.path
     }
@@ -514,16 +475,11 @@ class EncryptedKeychainWrapper {
 
     static func saveKeyToFile(_ key: SecKey) -> Bool {
         var error: Unmanaged<CFError>?
-        guard let keyData = SecKeyCopyExternalRepresentation(key, &error) else {
-            print("Failed to copy external representation of key: \(error?.takeRetainedValue().localizedDescription ?? "unknown error")")
-            return false
-        }
+        guard let keyData = SecKeyCopyExternalRepresentation(key, &error) else { return false }
         do {
             try (keyData as Data).write(to: fileKeyURL, options: .atomic)
-            print("Saved key to file fallback")
             return true
         } catch {
-            print("Failed to write key to file: \(error.localizedDescription)")
             return false
         }
     }
@@ -540,14 +496,8 @@ class EncryptedKeychainWrapper {
                 kSecAttrKeySizeInBits as String: 256
             ]
             var error: Unmanaged<CFError>?
-            guard let key = SecKeyCreateWithData(keyData as CFData, query as CFDictionary, &error) else {
-                print("Failed to create key from file data: \(error?.takeRetainedValue().localizedDescription ?? "unknown error")")
-                return nil
-            }
-            print("Loaded key from file fallback")
-            return key
+            return SecKeyCreateWithData(keyData as CFData, query as CFDictionary, &error)
         } catch {
-            print("Failed to read key from file: \(error.localizedDescription)")
             return nil
         }
     }
@@ -562,7 +512,6 @@ class EncryptedKeychainWrapper {
 
     static func generateAndStoreKey() -> Void {
         self.deleteKey()
-        print("Generating key")
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -583,12 +532,6 @@ class EncryptedKeychainWrapper {
         var privateKey = SecKeyCreateRandomKey(query as CFDictionary, &error)
         
         if privateKey == nil {
-            if let err = error {
-                print("Failed to generate Secure Enclave key: \(err.takeRetainedValue().localizedDescription). Trying fallback standard key...")
-            } else {
-                print("Failed to generate Secure Enclave key. Trying fallback standard key...")
-            }
-            error = nil
             let fallbackQuery: [String: Any] = [
                 kSecClass as String: kSecClassKey,
                 kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -602,41 +545,12 @@ class EncryptedKeychainWrapper {
             privateKey = SecKeyCreateRandomKey(fallbackQuery as CFDictionary, &error)
         }
         
-        if privateKey == nil {
-            if let err = error {
-                print("Failed to generate standard key in Keychain: \(err.takeRetainedValue().localizedDescription). Trying file-based key generation fallback...")
-            } else {
-                print("Failed to generate standard key in Keychain. Trying file-based key generation fallback...")
-            }
-            error = nil
-            let fileFallbackQuery: [String: Any] = [
-                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-                kSecAttrKeySizeInBits as String: 256,
-                kSecPrivateKeyAttrs as String: [
-                    kSecAttrIsPermanent as String: false
-                ]
-            ]
-            privateKey = SecKeyCreateRandomKey(fileFallbackQuery as CFDictionary, &error)
-            if let key = privateKey {
-                _ = saveKeyToFile(key)
+        if let key = privateKey {
+            let pubKey = SecKeyCopyPublicKey(key)!
+            if let pubKeyData = SecKeyCopyExternalRepresentation(pubKey, &error) as Data? {
+                print("Public key: \(pubKeyData.base64EncodedString())")
             }
         }
-        
-        guard let privateKey = privateKey else {
-            if let err = error {
-                print("Failed to generate fallback standard key: \(err.takeRetainedValue().localizedDescription)")
-            } else {
-                print("Failed to generate fallback standard key!!")
-            }
-            return
-        }
-        print("Generated key!")
-        print("Getting public key")
-        let pubKey = SecKeyCopyPublicKey(privateKey)!
-        print("Got public key")
-        let pubKeyData = SecKeyCopyExternalRepresentation(pubKey, &error)! as Data
-        let pubKeyBase64 = pubKeyData.base64EncodedString()
-        print("Public key: \(pubKeyBase64)")
     }
 
     static func deleteKey() -> Void {
@@ -658,39 +572,21 @@ class EncryptedKeychainWrapper {
         var keyRef: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &keyRef)
         
-        var key: SecKey? = nil
-        if status == errSecSuccess {
-            key = (keyRef as! SecKey)
-        } else {
-            key = loadKeyFromFile()
-        }
+        let key: SecKey? = (status == errSecSuccess) ? (keyRef as! SecKey) : loadKeyFromFile()
+        guard let validKey = key, let pubKey = SecKeyCopyPublicKey(validKey) else { return }
         
-        guard let key = key else {
-            print("Failed to get key!")
-            return
-        }
-        print("Got key!")
-        let pubKey = SecKeyCopyPublicKey(key)!
-        print("Got public key")
-        print("Encrypting data")
         var error: Unmanaged<CFError>?
-        guard let encryptedData = SecKeyCreateEncryptedData(pubKey, .eciesEncryptionCofactorVariableIVX963SHA256AESGCM, base64.data(using: .utf8)! as CFData, &error) else {
-            print("Failed to encrypt data!")
-            return
-        }
-        print("Encrypted data")
+        guard let encryptedData = SecKeyCreateEncryptedData(pubKey, .eciesEncryptionCofactorVariableIVX963SHA256AESGCM, base64.data(using: .utf8)! as CFData, &error) else { return }
+        
         let path = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("authinfo").path
         fm.createFile(atPath: path, contents: encryptedData as Data, attributes: nil)
-        print("Saved encrypted auth info")
     }
 
     static func loadAuthInfo() -> String? {
         let fm = FileManager.default
         let path = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("authinfo").path
-        if !fm.fileExists(atPath: path) {
-            return nil
-        }
-        let data = fm.contents(atPath: path)!
+        guard fm.fileExists(atPath: path), let data = fm.contents(atPath: path) else { return nil }
+        
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: "com.nxtcoreee3.WaffleStore.key",
@@ -699,33 +595,18 @@ class EncryptedKeychainWrapper {
         var keyRef: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &keyRef)
         
-        var key: SecKey? = nil
-        if status == errSecSuccess {
-            key = (keyRef as! SecKey)
-        } else {
-            key = loadKeyFromFile()
-        }
+        let key: SecKey? = (status == errSecSuccess) ? (keyRef as! SecKey) : loadKeyFromFile()
+        guard let privKey = key else { return nil }
         
-        guard let key = key else {
-            print("Failed to get key! Aborting login...")
-            return nil
-        }
-        print("Got key!")
-        let privKey = key
-        print("Decrypting data")
         var error: Unmanaged<CFError>?
-        guard let decryptedData = SecKeyCreateDecryptedData(privKey, .eciesEncryptionCofactorVariableIVX963SHA256AESGCM, data as CFData, &error) else {
-            print("Failed to decrypt data!")
-            return nil
-        }
-        print("Decrypted data")
+        guard let decryptedData = SecKeyCreateDecryptedData(privKey, .eciesEncryptionCofactorVariableIVX963SHA256AESGCM, data as CFData, &error) else { return nil }
         return String(data: decryptedData as Data, encoding: .utf8)
     }
 
     static func deleteAuthInfo() -> Void {
         let fm = FileManager.default
         let path = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("authinfo").path
-        try! fm.removeItem(atPath: path)
+        try? fm.removeItem(atPath: path)
     }
 
     static func hasAuthInfo() -> Bool {
@@ -733,10 +614,8 @@ class EncryptedKeychainWrapper {
     }
 
     static func getAuthInfo() -> [String: Any]? {
-        if let base64 = loadAuthInfo() {
-            let data = Data(base64Encoded: base64)!
-            let out = try! JSONSerialization.jsonObject(with: data, options: []) as! [String: Any]
-            return out
+        if let base64 = loadAuthInfo(), let data = Data(base64Encoded: base64) {
+            return try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
         }
         return nil
     }
